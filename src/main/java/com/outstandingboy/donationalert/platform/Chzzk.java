@@ -1,26 +1,30 @@
 package com.outstandingboy.donationalert.platform;
 
-import com.google.gson.JsonObject;
-import com.outstandingboy.donationalert.entity.Donation;
-import com.outstandingboy.donationalert.util.Gsons;
-import io.reactivex.disposables.Disposable;
-import io.reactivex.functions.Consumer;
-import io.reactivex.subjects.PublishSubject;
-import io.reactivex.subjects.Subject;
-import okhttp3.*;
-
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+
+import com.google.gson.JsonObject;
+import com.outstandingboy.donationalert.entity.Donation;
+import com.outstandingboy.donationalert.util.Gsons;
+
+import io.reactivex.disposables.Disposable;
+import io.reactivex.functions.Consumer;
+import io.reactivex.subjects.PublishSubject;
+import io.reactivex.subjects.ReplaySubject;
+import io.reactivex.subjects.Subject;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+import okhttp3.WebSocket;
+import okhttp3.WebSocketListener;
 
 public class Chzzk extends WebSocketListener implements Platform {
     private WebSocket socket;
     private Subject<Donation> donationObservable;
     private Subject<String> messageObservable;
-
-    private boolean timeout;
     private boolean connected;
     private final String channelId;
     private final String chatChannelId;
@@ -31,6 +35,9 @@ public class Chzzk extends WebSocketListener implements Platform {
     public Chzzk(String channelId) {
         this.channelId = channelId;
         this.wsId = Math.abs(channelId.chars().sum()) % 9 + 1;
+        this.donationObservable = PublishSubject.<Donation>create().toSerialized();
+        // Connection events can happen before subscribeMessage().
+        this.messageObservable = ReplaySubject.<String>createWithSize(16).toSerialized();
         this.client = new OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .addInterceptor(chain -> {
@@ -44,8 +51,6 @@ public class Chzzk extends WebSocketListener implements Platform {
         this.chatChannelId = getChatChannelId();
         accessToken = getAccessToken();
         connectToWebSocket();
-        donationObservable = PublishSubject.create();
-        messageObservable = PublishSubject.create();
     }
 
     private void connectToWebSocket() {
@@ -60,12 +65,20 @@ public class Chzzk extends WebSocketListener implements Platform {
             .url("https://api.chzzk.naver.com/service/v2/channels/" + channelId + "/live-detail")
             .get()
             .build();
-        try {
-            Response res = client.newCall(request).execute();
-            if (res.isSuccessful()) {
-                Map<String, Object> map = Gsons.gson().fromJson(res.body().string(), Map.class);
-                Map<String, Object> content = (Map<String, Object>) map.get("content");
-                return content.get("chatChannelId").toString();
+        try (Response res = client.newCall(request).execute()) {
+            ResponseBody body = res.body();
+            if (res.isSuccessful() && body != null) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> map = (Map<String, Object>) Gsons.gson().fromJson(body.string(), Map.class);
+                Object contentObj = map.get("content");
+                if (contentObj instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> content = (Map<String, Object>) contentObj;
+                    Object chatChannelIdObj = content.get("chatChannelId");
+                    if (chatChannelIdObj != null) {
+                        return chatChannelIdObj.toString();
+                    }
+                }
             }
             throw new RuntimeException("Failed to get Chat Channel ID from " + channelId);
         } catch (Exception e) {
@@ -78,10 +91,12 @@ public class Chzzk extends WebSocketListener implements Platform {
             .url("https://comm-api.game.naver.com/nng_main/v1/chats/access-token?channelId=" + chatChannelId + "&chatType=STREAMING")
             .get()
             .build();
-        Response res = null;
-        try {
-            res = client.newCall(request).execute();
-            JsonObject json = Gsons.gson().fromJson(res.body().string(), JsonObject.class);
+        try (Response res = client.newCall(request).execute()) {
+            ResponseBody body = res.body();
+            if (body == null) {
+                throw new RuntimeException("Failed to get access token (empty body)");
+            }
+            JsonObject json = Gsons.gson().fromJson(body.string(), JsonObject.class);
             JsonObject content = json.get("content").getAsJsonObject();
             return content.get("accessToken").getAsString();
         } catch (IOException e) {
@@ -112,6 +127,7 @@ public class Chzzk extends WebSocketListener implements Platform {
         JsonObject json = Gsons.gson().fromJson(text, JsonObject.class);
         int cmd = json.get("cmd").getAsInt();
         if (cmd == 10100) {
+            connected = true;
             messageObservable.onNext("치지직에 연결되었습니다!");
         } else if (cmd == 93102) {
             JsonObject bdy = json.get("bdy").getAsJsonArray().get(0).getAsJsonObject();
@@ -133,7 +149,6 @@ public class Chzzk extends WebSocketListener implements Platform {
 
     @Override
     public void onFailure(WebSocket webSocket, Throwable t, Response response) {
-        timeout = true;
         webSocket.close(1000, null);
         connectToWebSocket();
     }
@@ -152,7 +167,9 @@ public class Chzzk extends WebSocketListener implements Platform {
     public void close() {
         donationObservable.onComplete();
         messageObservable.onComplete();
-        socket.close(1000, null);
+        if (socket != null) {
+            socket.close(1000, null);
+        }
     }
 
     @Override

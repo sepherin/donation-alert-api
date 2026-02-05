@@ -1,14 +1,14 @@
 package com.outstandingboy.donationalert.platform;
 
-import com.outstandingboy.donationalert.entity.Donation;
-import com.outstandingboy.donationalert.exception.TokenNotFoundException;
-import com.outstandingboy.donationalert.exception.TwipVersionNotFoundException;
-import io.reactivex.disposables.Disposable;
-import io.reactivex.functions.Consumer;
-import io.reactivex.subjects.PublishSubject;
-import io.reactivex.subjects.Subject;
-import io.socket.client.IO;
-import io.socket.client.Socket;
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.net.URISyntaxException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 import org.json.simple.parser.ParseException;
@@ -17,13 +17,17 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import java.io.IOException;
-import java.io.UnsupportedEncodingException;
-import java.net.URISyntaxException;
-import java.net.URLEncoder;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
+import com.outstandingboy.donationalert.entity.Donation;
+import com.outstandingboy.donationalert.exception.TokenNotFoundException;
+import com.outstandingboy.donationalert.exception.TwipVersionNotFoundException;
+
+import io.reactivex.disposables.Disposable;
+import io.reactivex.functions.Consumer;
+import io.reactivex.subjects.PublishSubject;
+import io.reactivex.subjects.ReplaySubject;
+import io.reactivex.subjects.Subject;
+import io.socket.client.IO;
+import io.socket.client.Socket;
 
 public class Twip implements Platform {
     private Socket socket = null;
@@ -53,6 +57,10 @@ public class Twip implements Platform {
     }
 
     private void init(String key, String version, String token) {
+        donationObservable = PublishSubject.<Donation>create().toSerialized();
+        // Connection events can fire before subscribeMessage().
+        messageObservable = ReplaySubject.<String>createWithSize(16).toSerialized();
+
         String uri = String.format("https://io.mytwip.net?alertbox_key=" + key
             + "&version=" + version + "&token=" + encodeURIComponent(token));
 
@@ -64,7 +72,8 @@ public class Twip implements Platform {
         try {
             socket = IO.socket(uri, opts);
         } catch (URISyntaxException e) {
-            e.printStackTrace();
+            messageObservable.onNext("Twip 소켓 URI가 올바르지 않습니다: " + e.getMessage());
+            throw new IllegalArgumentException("Invalid Twip socket URI", e);
         }
 
         socket.on(Socket.EVENT_CONNECT, (args) -> {
@@ -92,13 +101,10 @@ public class Twip implements Platform {
                         donationObservable.onNext(donation);
                     }
                 } catch (ParseException e) {
-                    e.printStackTrace();
+                    messageObservable.onNext("Twip 후원 이벤트 파싱 오류: " + e.getMessage());
                 }
             });
         socket.connect();
-
-        donationObservable = PublishSubject.create();
-        messageObservable = PublishSubject.create();
     }
 
     private String parseVersion(String script) {
@@ -132,10 +138,12 @@ public class Twip implements Platform {
         }
     }
 
+    @Override
     public Subject<Donation> getDonationObservable() {
         return donationObservable;
     }
 
+    @Override
     public Subject<String> getMessageObservable() {
         return messageObservable;
     }
@@ -150,19 +158,33 @@ public class Twip implements Platform {
         return messageObservable.subscribe(onNext);
     }
 
+    @Override
     public void close() {
         donationObservable.onComplete();
         messageObservable.onComplete();
-        socket.close();
+        if (socket != null) {
+            socket.close();
+        }
     }
 
     public static String encodeURIComponent(String s) {
-        String result = null;
+        if (s == null) return "";
+
+        // URLEncoder is close but not identical to JS encodeURIComponent.
+        // Adjust to match common URI query encoding expectations.
+        String encoded;
         try {
-            result = URLEncoder.encode(s, "UTF-8").replaceAll("%", "%%");
+            encoded = URLEncoder.encode(s, StandardCharsets.UTF_8.name());
         } catch (UnsupportedEncodingException e) {
-            result = s;
+            return s;
         }
-        return result;
+
+        return encoded
+            .replace("+", "%20")
+            .replace("%21", "!")
+            .replace("%27", "'")
+            .replace("%28", "(")
+            .replace("%29", ")")
+            .replace("%7E", "~");
     }
 }

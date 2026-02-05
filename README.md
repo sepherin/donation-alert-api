@@ -104,3 +104,38 @@ implementation  'io.reactivex.rxjava2:rxjava:2.1.16'
 implementation 'org.jsoup:jsoup:1.13.1'
 implementation 'com.googlecode.json-simple:json-simple:1.1.1'
 ```
+
+<br><br><br><br><br>
+
+# 개발 환경
+
+- OS: Windows (테스트/개발 환경)
+- JDK: Java 8 소스 호환 (`sourceCompatibility = 1.8`)
+    - 로컬 실행 테스트: Eclipse Temurin JDK 21
+- Build Tool: Gradle Wrapper (`gradlew.bat`)
+
+## 실행 파일(JAR) 빌드
+
+### 1) 라이브러리 JAR 빌드 (의존성 미포함)
+
+```powershell
+./gradlew.bat clean build
+```
+
+- 결과물: `build/libs/DonationAlertAPI-<version>.jar`
+
+### 2) 실행 가능한 Fat JAR 빌드 (의존성 포함)
+
+프로젝트에는 실행 예제용 `main()`이 포함되어 있습니다: `com.outstandingboy.donationalert.ToonationAPI`.
+
+```powershell
+./gradlew.bat clean fatJar
+```
+
+- 결과물: `build/libs/DonationAlertAPI-<version>-all.jar`
+
+실행:
+
+```powershell
+java -jar build/libs/DonationAlertAPI-<version>-all.jar
+```

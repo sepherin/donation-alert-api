@@ -4,7 +4,7 @@ import org.junit.Test;
 
 public class DonationAlertAPITest {
     @Test
-    void parseTest() {
+    public void parseTest() {
 
     }
 }
