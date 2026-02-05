@@ -139,3 +139,5 @@ implementation 'com.googlecode.json-simple:json-simple:1.1.1'
 ```powershell
 java -jar build/libs/DonationAlertAPI-<version>-all.jar
 ```
+
+![alt text](<img/ScreenShot 2026-02-05 143538.png>)
